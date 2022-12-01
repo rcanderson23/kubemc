@@ -1,0 +1,17 @@
+[package]
+name = "kubemc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.66"
+clap = { version = "4.0.27", features = ["derive"] }
+k8s-openapi = { version = "0.16.0", features = ["v1_25"] }
+kube = { version = "0.76.0", features = ["client", "config", "runtime", "rustls-tls"] }
+serde = { version = "1.0.148", features = ["std", "derive"] }
+serde_yaml = "0.9.14"
+tokio = { version = "1.22.0", features = ["rt-multi-thread", "time", "fs", "macros", "net"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
