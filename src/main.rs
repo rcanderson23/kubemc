@@ -9,6 +9,7 @@ async fn main() -> Result<()> {
 
     match cli.action {
         kubemc::commands::Action::Get => cli.get().await?,
+        kubemc::commands::Action::GenerateConfig => cli.generate_config().await?,
     }
     Ok(())
 }
