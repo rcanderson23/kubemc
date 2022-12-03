@@ -6,7 +6,7 @@ use kube::{
     config::{KubeConfigOptions, Kubeconfig},
     core::DynamicObject,
     discovery::{ApiCapabilities, ApiResource, Scope},
-    Api, Client, Discovery,
+    Api, Client, Discovery, ResourceExt, api::ListParams,
 };
 
 use crate::config::{Cluster, MCConfig};
@@ -20,8 +20,16 @@ pub struct Cli {
     /// Kubernetes resource to apply action to
     pub resource: Option<String>,
 
+    /// Name of resource to retrieve
+    pub name: Option<String>,
+
     /// Path to config file
+    #[arg(long, short)]
     pub config_file: Option<String>,
+
+    /// Namespace to fetch resources from
+    #[arg(long, short)]
+    pub namespace: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, ValueEnum)]
@@ -35,11 +43,19 @@ impl Cli {
         let clusterset = MCConfig::load_config(self.config_file.as_ref())?.active_clusterset()?;
         let mut clients: Vec<Api<DynamicObject>> = Vec::new();
         for cluster in clusterset.clusters {
-            let resource = self.resource.clone().unwrap_or_else(|| "".to_string());
-            clients.push(create_cluster_client(cluster, None, &resource).await?)
+            let resource = self.resource.clone().unwrap_or_default();
+            clients.push(create_cluster_client(cluster, self.namespace.clone(), &resource).await?)
         }
         for client in clients {
-            println!("{:?}", client.get("").await?);
+            if let Some(n) = &self.name {
+                let list = client.get(n).await?.name_any();
+                println!("{:?}", list);
+            } else {
+                let list = client.list(&ListParams::default()).await?;
+                for object in list.items {
+                    println!("{}", object.name_any());
+                }
+            }
         }
         Ok(())
     }
