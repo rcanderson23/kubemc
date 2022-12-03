@@ -1,5 +1,5 @@
 use anyhow::Context;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dirs::home_dir;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,10 +28,29 @@ impl MCConfig {
         Ok(config_yaml)
     }
 
+    pub fn active_clusterset(&self) -> Result<Clusterset> {
+        for clusterset in &self.clustersets {
+            if clusterset.name == self.current_clusterset {
+                return Ok(clusterset.clone());
+            }
+        }
+        Err(anyhow!("clusterset {} not found", self.current_clusterset))
+    }
+
     /// Load from specified path, then environment variable, or finally default location
-    pub fn load_config<P: AsRef<Path>>(path: P) -> Result<MCConfig> {
-        let data = fs::read_to_string(path).context("failed to load file")?;
-        parse_config(&data)
+    pub fn load_config<P: AsRef<Path>>(path: Option<P>) -> Result<MCConfig> {
+        if let Some(path) = path {
+            let data = fs::read_to_string(path).context("failed to load file")?;
+            parse_config(&data)
+        } else if let Some(path) = env_config_path() {
+            let data = fs::read_to_string(path).context("failed to load file")?;
+            parse_config(&data)
+        } else if let Some(path) = default_config_path() {
+            let data = fs::read_to_string(path).context("failed to load file")?;
+            parse_config(&data)
+        } else {
+            Err(anyhow!("failed to load config"))
+        }
     }
 }
 
