@@ -8,7 +8,7 @@ use k8s_openapi::{
 use kube::{
     api::ListParams,
     config::{KubeConfigOptions, Kubeconfig},
-    core::{DynamicObject, ObjectList},
+    core::DynamicObject,
     discovery::{ApiCapabilities, ApiResource, Scope},
     Api, Client as KubeClient, Discovery, ResourceExt,
 };

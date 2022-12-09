@@ -3,7 +3,6 @@ use std::io::{self, Write};
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 
-use crate::client::MCClient;
 use crate::{
     client::Client,
     config::MCConfig,
