@@ -35,12 +35,9 @@ impl Client {
         namespace: Option<String>,
         resource: &str,
     ) -> Result<Self> {
+        let clustername = cluster.name();
         let kubeconfig = Kubeconfig::read()?;
-        let options = KubeConfigOptions {
-            context: None,
-            cluster: Some(cluster.cluster.clone()),
-            user: Some(cluster.user),
-        };
+        let options = cluster.into();
 
         let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
         let client = KubeClient::try_from(config)?;
@@ -55,17 +52,17 @@ impl Client {
         if let Some((ar, cap)) = ar_cap {
             if cap.scope == Scope::Cluster {
                 Ok(Self {
-                    clustername: cluster.cluster,
+                    clustername,
                     kubeclient: Api::all_with(client, &ar),
                 })
             } else if let Some(namespace) = namespace {
                 Ok(Self {
-                    clustername: cluster.cluster,
+                    clustername,
                     kubeclient: Api::namespaced_with(client, &namespace, &ar),
                 })
             } else {
                 Ok(Self {
-                    clustername: cluster.cluster,
+                    clustername,
                     kubeclient: Api::default_namespaced_with(client, &ar),
                 })
             }
