@@ -66,6 +66,9 @@ pub struct Clusterset {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
+    /// The name used to associate cluster output with
+    pub name: String,
+
     /// The cluster to use defined in your kubeconfig
     pub cluster: Option<String>,
 
@@ -74,16 +77,6 @@ pub struct Cluster {
 
     /// Allow users to specify a context rather than both the cluster and user
     pub context: Option<String>,
-}
-
-impl Cluster {
-    pub fn name(&self) -> String {
-        match (&self.context, &self.cluster, &self.user) {
-            (Some(context), _, _) => context.to_string(),
-            (_, Some(cluster), Some(user)) => cluster.to_string() + user,
-            _ => "unknown".to_string(),
-        }
-    }
 }
 
 impl From<Cluster> for KubeConfigOptions {
