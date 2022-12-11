@@ -7,7 +7,7 @@ use k8s_openapi::{
 };
 use kube::{
     api::ListParams,
-    config::{KubeConfigOptions, Kubeconfig},
+    config::Kubeconfig,
     core::DynamicObject,
     discovery::{ApiCapabilities, ApiResource, Scope},
     Api, Client as KubeClient, Discovery, ResourceExt,
@@ -35,7 +35,7 @@ impl Client {
         namespace: Option<String>,
         resource: &str,
     ) -> Result<Self> {
-        let clustername = cluster.name();
+        let clustername = cluster.name.clone();
         let kubeconfig = Kubeconfig::read()?;
         let options = cluster.into();
 
@@ -145,40 +145,61 @@ struct Status {
     pub replicas: Option<u16>,
 
     // Node conditions
-    pub conditions: Option<Vec<NodeCondition>>,
-    //#[serde(rename = "availableReplicas")]
-    //pub available_replicas: Option<u16>,
-    //#[serde(rename = "readyReplicas")]
-    //pub ready_replicas: Option<u16>,
-    //#[serde(rename = "updatedReplicas")]
-    //pub updated_replicas: Option<u16>,
+    pub conditions: Option<Vec<Condition>>,
+
+    #[serde(rename = "availableReplicas")]
+    pub available_replicas: Option<u16>,
+
+    #[serde(rename = "readyReplicas")]
+    pub ready_replicas: Option<u16>,
+
+    #[serde(rename = "updatedReplicas")]
+    pub updated_replicas: Option<u16>,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct Condition {
+    #[serde(rename = "type")]
+    pub type_: String,
+
+    pub status: String,
 }
 
 impl Status {
     fn get_ready(&self) -> String {
-        let container_statuses = self.container_statuses.clone().unwrap_or_default();
-        let container_count = container_statuses.len();
-        if container_count == 0 {
-            return "".to_string();
+        if let Some(cs) = &self.container_statuses {
+            let container_count = cs.len();
+            let containers_ready = cs.iter().filter(|cs| cs.ready).count();
+            return format!("{}/{}", containers_ready, container_count);
+        }
+        if let (Some(ready_rep), Some(rep)) = (&self.ready_replicas, &self.replicas) {
+            return format!("{}/{}", ready_rep, rep);
         }
 
-        let containers_ready = container_statuses.into_iter().filter(|cs| cs.ready).count();
-
-        format!("{}/{}", containers_ready, container_count)
+        String::default()
     }
 
     fn get_status(&self) -> String {
         if self.phase.is_some() {
             return self.phase.clone().unwrap_or_default();
         }
-        let conditions = self.conditions.clone().unwrap_or_default();
-        let mut status = String::from("NotReady");
-        for condition in conditions {
-            if condition.type_.contains("Ready") && condition.status.contains("True") {
-                status = String::from("Ready");
+
+        match &self.conditions {
+            Some(c) => {
+                let mut status = String::new();
+                for condition in c {
+                    if condition.type_.as_str() == "Ready" {
+                        status = match condition.status.as_str() {
+                            "True" => String::from("Ready"),
+                            "False" => String::from("NotReady"),
+                            _ => String::default(),
+                        }
+                    }
+                }
+                status
             }
+            None => String::default(),
         }
-        status
     }
 }
 
