@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use k8s_openapi::{
-    api::core::v1::{ContainerStatus, NodeCondition},
-    apimachinery::pkg::apis::meta::v1::Time,
-    chrono::Utc,
+    api::core::v1::ContainerStatus, apimachinery::pkg::apis::meta::v1::Time, chrono::Utc,
 };
 use kube::{
     api::ListParams,
@@ -147,14 +145,8 @@ struct Status {
     // Node conditions
     pub conditions: Option<Vec<Condition>>,
 
-    #[serde(rename = "availableReplicas")]
-    pub available_replicas: Option<u16>,
-
     #[serde(rename = "readyReplicas")]
     pub ready_replicas: Option<u16>,
-
-    #[serde(rename = "updatedReplicas")]
-    pub updated_replicas: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
