@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::{fs, path::Path};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MCConfig {
+pub struct Config {
     /// Version of multicluster config
     #[serde(rename = "apiVersion")]
     pub api_version: String,
@@ -21,10 +21,10 @@ pub struct MCConfig {
     pub clustersets: Vec<Clusterset>,
 }
 
-impl MCConfig {
+impl Config {
     /// Return defautl config file in yaml format
     pub fn yaml() -> Result<String> {
-        let config = MCConfig::default();
+        let config = Config::default();
         let config_yaml = serde_yaml::to_string(&config)?;
         Ok(config_yaml)
     }
@@ -39,7 +39,7 @@ impl MCConfig {
     }
 
     /// Load from specified path, then environment variable, or finally default location
-    pub fn load_config<P: AsRef<Path>>(path: Option<P>) -> Result<MCConfig> {
+    pub fn load_config<P: AsRef<Path>>(path: Option<P>) -> Result<Config> {
         if let Some(path) = path {
             let data = fs::read_to_string(path).context("failed to load file")?;
             parse_config(&data)
@@ -89,7 +89,7 @@ impl From<Cluster> for KubeConfigOptions {
     }
 }
 
-fn parse_config(c: &str) -> Result<MCConfig> {
+fn parse_config(c: &str) -> Result<Config> {
     Ok(serde_yaml::from_str(c)?)
 }
 
@@ -106,10 +106,10 @@ fn env_config_path() -> Option<PathBuf> {
     }
 }
 
-impl Default for MCConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
-            api_version: "mcconfig/v1alpha1".into(),
+            api_version: "kubemc/v1alpha1".into(),
             current_clusterset: "".into(),
             clustersets: Default::default(),
         }
@@ -121,8 +121,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mcconfig_deserialize() {
-        let config_yaml = "apiVersion: mcconfig/v1alpha1
+    fn config_deserialize() {
+        let config_yaml = "apiVersion: kubemc/v1alpha1
 current-clusterset: prod
 clustersets:
 - name: prod
@@ -145,8 +145,8 @@ clustersets:
     }
 
     #[test]
-    fn mcconfig_generate() {
-        let config_yaml = MCConfig::yaml().unwrap();
+    fn config_generate() {
+        let config_yaml = Config::yaml().unwrap();
         assert_eq!(
             config_yaml,
             "apiVersion: mcconfig/v1alpha1

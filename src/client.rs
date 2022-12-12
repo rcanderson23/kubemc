@@ -40,6 +40,11 @@ impl Client {
         let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
         let client = KubeClient::try_from(config)?;
 
+        // Check common/known resources before using discovery
+        if let Some(r) = known_resources(resource) {
+            return Ok(create_client(clustername, client, r.0, r.1, namespace));
+        }
+
         let discovery = Discovery::new(client.clone())
             .run()
             .await
@@ -48,22 +53,7 @@ impl Client {
         let ar_cap = resolve_api_resource(&discovery, resource);
 
         if let Some((ar, cap)) = ar_cap {
-            if cap.scope == Scope::Cluster {
-                Ok(Self {
-                    clustername,
-                    kubeclient: Api::all_with(client, &ar),
-                })
-            } else if let Some(namespace) = namespace {
-                Ok(Self {
-                    clustername,
-                    kubeclient: Api::namespaced_with(client, &namespace, &ar),
-                })
-            } else {
-                Ok(Self {
-                    clustername,
-                    kubeclient: Api::default_namespaced_with(client, &ar),
-                })
-            }
+            Ok(create_client(clustername, client, ar, cap.scope, namespace))
         } else {
             Err(anyhow!("failed to find resource"))
         }
@@ -94,7 +84,34 @@ impl Client {
     }
 }
 
+fn create_client(
+    clustername: String,
+    client: KubeClient,
+    ar: ApiResource,
+    scope: Scope,
+    ns: Option<String>,
+) -> Client {
+    if scope == Scope::Cluster {
+        Client {
+            clustername,
+            kubeclient: Api::all_with(client, &ar),
+        }
+    } else if let Some(namespace) = ns {
+        Client {
+            clustername,
+            kubeclient: Api::namespaced_with(client, &namespace, &ar),
+        }
+    } else {
+        Client {
+            clustername,
+            kubeclient: Api::default_namespaced_with(client, &ar),
+        }
+    }
+}
 fn get_age(creation: Option<Time>) -> String {
+    if creation.is_none() {
+        return String::default();
+    }
     let duration = Utc::now().signed_duration_since(creation.unwrap().0);
     match (
         duration.num_days(),
@@ -106,6 +123,113 @@ fn get_age(creation: Option<Time>) -> String {
         (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
         (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
         (_, _, _, secs) => format!("{}s", secs),
+    }
+}
+
+// Check for commonly used resources and short names before using discovery api
+fn known_resources(resource: &str) -> Option<(ApiResource, Scope)> {
+    match resource {
+        "po" | "pod" | "pods" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "Pod".into(),
+                plural: "pods".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "no" | "node" | "nodes" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "Node".into(),
+                plural: "nodes".into(),
+            },
+            Scope::Cluster,
+        )),
+        "cm" | "configmap" | "configmaps" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "ConfigMap".into(),
+                plural: "configmaps".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "deploy" | "deployment" | "deployments" => Some((
+            ApiResource {
+                group: "apps".into(),
+                version: "v1".into(),
+                api_version: "apps/v1".into(),
+                kind: "Deployment".into(),
+                plural: "deployments".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "ds" | "daemonset" | "daemonsets" => Some((
+            ApiResource {
+                group: "apps".into(),
+                version: "v1".into(),
+                api_version: "apps/v1".into(),
+                kind: "DaemonSet".into(),
+                plural: "daemonsets".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "pvc" | "persistentvolumeclaim" | "persistentvolumeclaims" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "PersistentVolumeClaim".into(),
+                plural: "PersistentVolumeClaims".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "rs" | "replicaset" | "replicasets" => Some((
+            ApiResource {
+                group: "apps".into(),
+                version: "v1".into(),
+                api_version: "apps/v1".into(),
+                kind: "ReplicaSet".into(),
+                plural: "replicasets".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "sts" | "statefulset" | "statefulsets" => Some((
+            ApiResource {
+                group: "apps".into(),
+                version: "v1".into(),
+                api_version: "apps/v1".into(),
+                kind: "StatefulSet".into(),
+                plural: "statefulsets".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "svc" | "service" | "services" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "Service".into(),
+                plural: "services".into(),
+            },
+            Scope::Namespaced,
+        )),
+        "secret" | "secrets" => Some((
+            ApiResource {
+                group: "".into(),
+                version: "v1".into(),
+                api_version: "v1".into(),
+                kind: "Secret".into(),
+                plural: "secrets".into(),
+            },
+            Scope::Namespaced,
+        )),
+        _ => None,
     }
 }
 

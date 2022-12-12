@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 
 use crate::{
     client::Client,
-    config::MCConfig,
+    config::Config,
     output::{create_table, Output},
 };
 
@@ -39,7 +39,7 @@ pub enum Action {
 
 impl Cli {
     pub async fn get(&self) -> Result<()> {
-        let clusterset = MCConfig::load_config(self.config_file.as_ref())?.active_clusterset()?;
+        let clusterset = Config::load_config(self.config_file.as_ref())?.active_clusterset()?;
         let mut clients: Vec<Client> = Vec::new();
         for cluster in clusterset.clusters {
             let resource = self.resource.clone().unwrap_or_default();
@@ -52,7 +52,7 @@ impl Cli {
     }
 
     pub async fn generate_config(&self) -> Result<()> {
-        let config_yaml = MCConfig::yaml()?;
+        let config_yaml = Config::yaml()?;
         io::stdout().write(config_yaml.as_bytes()).map(|_| Ok(()))?
     }
 }
