@@ -94,11 +94,11 @@ fn parse_config(c: &str) -> Result<Config> {
 }
 
 fn default_config_path() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".kube").join("mcconfig"))
+    home_dir().map(|h| h.join(".kube").join("kubemc"))
 }
 
 fn env_config_path() -> Option<PathBuf> {
-    let path = std::env::var("MCCONFIG");
+    let path = std::env::var("KUBEMC_CONFIG");
     if let Ok(p) = path {
         Some(PathBuf::from(p))
     } else {
@@ -133,7 +133,7 @@ clustersets:
     user: prod-read-only
 - name: stage
   clusters:
-  - cluster: stage1 
+  - cluster: stage1
     user: stage-admin
   - cluster: stage2
     user: stage-read-only
@@ -149,7 +149,7 @@ clustersets:
         let config_yaml = Config::yaml().unwrap();
         assert_eq!(
             config_yaml,
-            "apiVersion: mcconfig/v1alpha1
+            "apiVersion: kubemc/v1alpha1
 current-clusterset: ''
 clustersets: []
 "
