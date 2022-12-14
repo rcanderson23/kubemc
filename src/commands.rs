@@ -42,7 +42,10 @@ impl Cli {
     pub async fn get(&self) -> Result<()> {
         let config = Config::load_config(self.config_file.as_ref())?;
         let clusterset = config.active_clusterset()?;
-        let ns = config.active_namespace()?;
+        let mut ns = config.active_namespace()?;
+        if let Some(namespace) = &self.namespace {
+            ns = namespace.to_owned()
+        }
         let mut clients: Vec<Client> = Vec::new();
         for cluster in &clusterset.clusters {
             let resource = self.resource.clone().unwrap_or_default();
