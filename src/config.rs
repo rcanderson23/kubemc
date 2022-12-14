@@ -22,9 +22,27 @@ pub struct Config {
 }
 
 impl Config {
-    /// Return defautl config file in yaml format
+    /// Return default config file in yaml format
     pub fn yaml() -> Result<String> {
-        let config = Config::default();
+        let cluster = Cluster {
+            name: "cluster1".into(),
+            cluster: Some("CLUSTER".into()),
+            user: Some("USER".into()),
+            context: None,
+        };
+
+        let clusterset = Clusterset {
+            name: "clusterset1".into(),
+            namespace: "default".into(),
+            clusters: vec![cluster],
+        };
+
+        let config = Config {
+            api_version: "kubemc/v1alpha1".into(),
+            current_clusterset: "default".into(),
+            clustersets: vec![clusterset],
+        };
+
         let config_yaml = serde_yaml::to_string(&config)?;
         Ok(config_yaml)
     }
@@ -60,22 +78,28 @@ pub struct Clusterset {
     /// Name of clusterset
     pub name: String,
 
+    /// Active namespace for namespaced objects
+    pub namespace: String,
+
     /// Clusters to query as part of the clusterset
     pub clusters: Vec<Cluster>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Cluster {
     /// The name used to associate cluster output with
     pub name: String,
 
     /// The cluster to use defined in your kubeconfig
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
 
     /// The user to use to connect to the cluster, defined in your kubeconfig
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
 
     /// Allow users to specify a context rather than both the cluster and user
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
 }
 
