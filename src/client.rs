@@ -28,11 +28,7 @@ pub trait MCClient {
 }
 
 impl Client {
-    pub async fn try_new(
-        cluster: Cluster,
-        namespace: Option<String>,
-        resource: &str,
-    ) -> Result<Self> {
+    pub async fn try_new(cluster: &Cluster, namespace: &str, resource: &str) -> Result<Self> {
         let clustername = cluster.name.clone();
         let kubeconfig = Kubeconfig::read()?;
         let options = cluster.into();
@@ -89,22 +85,17 @@ fn create_client(
     client: KubeClient,
     ar: ApiResource,
     scope: Scope,
-    ns: Option<String>,
+    ns: &str,
 ) -> Client {
     if scope == Scope::Cluster {
         Client {
             clustername,
             kubeclient: Api::all_with(client, &ar),
         }
-    } else if let Some(namespace) = ns {
-        Client {
-            clustername,
-            kubeclient: Api::namespaced_with(client, &namespace, &ar),
-        }
     } else {
         Client {
             clustername,
-            kubeclient: Api::default_namespaced_with(client, &ar),
+            kubeclient: Api::namespaced_with(client, ns, &ar),
         }
     }
 }

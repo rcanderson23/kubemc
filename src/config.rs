@@ -39,7 +39,7 @@ impl Config {
 
         let config = Config {
             api_version: "kubemc/v1alpha1".into(),
-            current_clusterset: "default".into(),
+            current_clusterset: "clusterset1".into(),
             clustersets: vec![clusterset],
         };
 
@@ -47,13 +47,31 @@ impl Config {
         Ok(config_yaml)
     }
 
-    pub fn active_clusterset(&self) -> Result<Clusterset> {
+    pub fn active_clusterset(&self) -> Result<&Clusterset> {
         for clusterset in &self.clustersets {
             if clusterset.name == self.current_clusterset {
-                return Ok(clusterset.clone());
+                return Ok(clusterset);
             }
         }
         Err(anyhow!("clusterset {} not found", self.current_clusterset))
+    }
+
+    pub fn active_namespace(&self) -> Result<String> {
+        match self.active_clusterset() {
+            Ok(cs) => Ok(cs.namespace.clone()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_namespace(&mut self, ns: String) -> Result<()> {
+        for mut clusterset in &mut self.clustersets {
+            if clusterset.name == self.current_clusterset {
+                clusterset.namespace = ns;
+                return Ok(());
+            }
+        }
+
+        Err(anyhow!("failed to find active cluster"))
     }
 
     /// Load from specified path, then environment variable, or finally default location
@@ -70,6 +88,17 @@ impl Config {
         } else {
             Err(anyhow!("failed to load config"))
         }
+    }
+
+    pub fn load_config_from_default_file() -> Result<Config> {
+        let path = default_config_path().unwrap_or_default();
+        let data = fs::read_to_string(path).context("failed to load file")?;
+        parse_config(&data)
+    }
+
+    pub fn write_config_to_defaul(config: String) -> Result<()> {
+        let path = default_config_path().unwrap_or_default();
+        fs::write(path, config).context("failed to write kubemc config")
     }
 }
 
@@ -113,6 +142,16 @@ impl From<Cluster> for KubeConfigOptions {
     }
 }
 
+impl From<&Cluster> for KubeConfigOptions {
+    fn from(c: &Cluster) -> Self {
+        Self {
+            context: c.context.clone(),
+            cluster: c.cluster.clone(),
+            user: c.user.clone(),
+        }
+    }
+}
+
 fn parse_config(c: &str) -> Result<Config> {
     Ok(serde_yaml::from_str(c)?)
 }
@@ -137,46 +176,5 @@ impl Default for Config {
             current_clusterset: "".into(),
             clustersets: Default::default(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_deserialize() {
-        let config_yaml = "apiVersion: kubemc/v1alpha1
-current-clusterset: prod
-clustersets:
-- name: prod
-  clusters:
-  - cluster: prod1
-    user: prod-admin
-  - cluster: prod2
-    user: prod-read-only
-- name: stage
-  clusters:
-  - cluster: stage1
-    user: stage-admin
-  - cluster: stage2
-    user: stage-read-only
-";
-
-        let config = parse_config(config_yaml).unwrap();
-        assert_eq!(config.clustersets[0].name, "prod");
-        assert_eq!(config.clustersets[1].name, "stage");
-    }
-
-    #[test]
-    fn config_generate() {
-        let config_yaml = Config::yaml().unwrap();
-        assert_eq!(
-            config_yaml,
-            "apiVersion: kubemc/v1alpha1
-current-clusterset: ''
-clustersets: []
-"
-        )
     }
 }
