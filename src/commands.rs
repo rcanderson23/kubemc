@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
-use anyhow::{anyhow, Result};
-use clap::{Parser, ValueEnum};
+use anyhow::{Result};
+use clap::{Parser, Subcommand};
 
 use crate::{
     client::Client,
@@ -13,14 +13,8 @@ use crate::{
 #[clap(version, about, long_about = None)]
 pub struct Cli {
     /// Action for CLI to use
+    #[command(subcommand)]
     pub action: Action,
-
-    /// Kubernetes resource to apply action to
-    pub resource: Option<String>,
-
-    // TODO implement fetching specific resources in clusters
-    /// Name of resource to retrieve
-    //pub name: Option<String>,
 
     /// Path to config file
     #[arg(long, short)]
@@ -31,15 +25,27 @@ pub struct Cli {
     pub namespace: Option<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, ValueEnum)]
+#[derive(Clone, PartialEq, Eq, Debug, Subcommand)]
 pub enum Action {
-    Get,
+    /// Get/List Kubernetes resources
+    #[command(arg_required_else_help = true)]
+    Get{
+        /// Kubernetes resource (pod, node, etc)
+        resource: String,
+    },
+
+    /// Generates an example config
     GenerateConfig,
-    Namespace,
+
+    #[command(arg_required_else_help = true)]
+    /// Changes the configured namespace in kubemc config
+    Namespace{
+        namespace: String,
+    },
 }
 
 impl Cli {
-    pub async fn get(&self) -> Result<()> {
+    pub async fn get(&self, resource: &str) -> Result<()> {
         let config = Config::load_config(self.config_file.as_ref())?;
         let clusterset = config.active_clusterset()?;
         let mut ns = config.active_namespace()?;
@@ -48,7 +54,6 @@ impl Cli {
         }
         let mut clients: Vec<Client> = Vec::new();
         for cluster in &clusterset.clusters {
-            let resource = self.resource.clone().unwrap_or_default();
             clients.push(Client::try_new(cluster, &ns, &resource).await?)
         }
         let outputs = list_resources(clients).await;
@@ -62,12 +67,9 @@ impl Cli {
         io::stdout().write(config_yaml.as_bytes()).map(|_| Ok(()))?
     }
 
-    pub async fn namespace(&self) -> Result<()> {
-        if self.resource.is_none() {
-            return Err(anyhow!("namespace namespace not provided"));
-        }
+    pub async fn namespace(&self, ns: &str) -> Result<()> {
         let mut config = Config::load_config_from_default_file()?;
-        config.set_namespace(self.resource.as_ref().unwrap().to_string())?;
+        config.set_namespace(ns.to_string())?;
         Config::write_config_to_defaul(serde_yaml::to_string(&config)?)
     }
 }
