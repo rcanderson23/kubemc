@@ -63,10 +63,10 @@ impl Config {
         }
     }
 
-    pub fn set_namespace(&mut self, ns: String) -> Result<()> {
+    pub fn set_namespace(&mut self, ns: &str) -> Result<()> {
         for mut clusterset in &mut self.clustersets {
             if clusterset.name == self.current_clusterset {
-                clusterset.namespace = ns;
+                clusterset.namespace = ns.to_owned();
                 return Ok(());
             }
         }

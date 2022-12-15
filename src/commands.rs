@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use anyhow::{Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::{
@@ -25,13 +25,16 @@ pub struct Cli {
     pub namespace: Option<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub enum Action {
     /// Get/List Kubernetes resources
     #[command(arg_required_else_help = true)]
-    Get{
+    Get {
         /// Kubernetes resource (pod, node, etc)
         resource: String,
+
+        /// Name of resource
+        name: Option<String>,
     },
 
     /// Generates an example config
@@ -39,13 +42,11 @@ pub enum Action {
 
     #[command(arg_required_else_help = true)]
     /// Changes the configured namespace in kubemc config
-    Namespace{
-        namespace: String,
-    },
+    Namespace { namespace: String },
 }
 
 impl Cli {
-    pub async fn get(&self, resource: &str) -> Result<()> {
+    pub async fn get(&self, resource: &str, name: &Option<String>) -> Result<()> {
         let config = Config::load_config(self.config_file.as_ref())?;
         let clusterset = config.active_clusterset()?;
         let mut ns = config.active_namespace()?;
@@ -54,7 +55,7 @@ impl Cli {
         }
         let mut clients: Vec<Client> = Vec::new();
         for cluster in &clusterset.clusters {
-            clients.push(Client::try_new(cluster, &ns, &resource).await?)
+            clients.push(Client::try_new(cluster, &ns, resource).await?)
         }
         let outputs = list_resources(clients).await;
 
@@ -69,7 +70,7 @@ impl Cli {
 
     pub async fn namespace(&self, ns: &str) -> Result<()> {
         let mut config = Config::load_config_from_default_file()?;
-        config.set_namespace(ns.to_string())?;
+        config.set_namespace(ns)?;
         Config::write_config_to_defaul(serde_yaml::to_string(&config)?)
     }
 }
