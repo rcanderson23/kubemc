@@ -63,25 +63,15 @@ impl Cli {
             let cn = lr.clustername;
             for obj in lr.object_list{
                 let status: Status = serde_json::from_value(obj.data["status"].to_owned()).unwrap_or_default();
-                outputs.push(Output{ cluster: cn.to_owned(), namespace: obj.namespace().unwrap_or_default(), name: obj.name_any(), status: status.get_status(), ready: status.get_ready(), age: get_age(obj.creation_timestamp())});
+                outputs.push(Output{ 
+                    cluster: cn.to_owned(), 
+                    namespace: obj.namespace().unwrap_or_default(), 
+                    name: obj.name_any(), status: status.get_status(),
+                    ready: status.get_ready(), 
+                    age: get_age(obj.creation_timestamp())
+                });
             }
         }
-        //let output: Vec<Output> = lr.iter().map(|resp|{
-        //    let cn = resp.clustername;
-        //    let output: Vec<Output> = resp.object_list.iter().map(|obj|{
-        //        let status: Status = serde_json::from_value(obj.data["status"]).unwrap_or_default();
-        //        Output{
-        //            cluster: cn,
-        //            namespace: obj.namespace().unwrap_or_default(),
-        //            name: obj.name_any(),
-        //            status: status.get_status(),
-        //            ready: status.get_ready(),
-        //            age: get_age(obj.creation_timestamp()),
-        //        }
-        //    }).collect();
-        //    output
-        //}).collect();
-
         create_table(outputs);
         Ok(())
     }
