@@ -1,21 +1,17 @@
-use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
-use k8s_openapi::{
-    api::core::v1::ContainerStatus, apimachinery::pkg::apis::meta::v1::Time, chrono::Utc,
-};
+use anyhow::{Context, Result};
+use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
     config::Kubeconfig,
     core::{DynamicObject, ObjectList},
     discovery::{ApiCapabilities, ApiResource, Scope},
-    Api, Client as KubeClient, Discovery, ResourceExt,
+    Api, Client as KubeClient, Discovery,
 };
 use serde::Deserialize;
-use std::{collections::HashMap, fmt::Display};
+use std::fmt::Display;
 use tracing::log::{debug, warn};
 
 use crate::config::Cluster;
-use crate::output::Output;
 
 pub struct Client {
     kubeclients: Vec<(String, Api<DynamicObject>)>,
@@ -97,7 +93,7 @@ async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
                 }
             }
             Err(e) => {
-                debug!("join handle failed")
+                debug!("join handle failed {}", e)
             }
         }
     }
@@ -114,23 +110,6 @@ fn create_client(
         Api::all_with(client, &ar)
     } else {
         Api::namespaced_with(client, ns, &ar)
-    }
-}
-fn get_age(creation: Option<Time>) -> String {
-    if creation.is_none() {
-        return String::default();
-    }
-    let duration = Utc::now().signed_duration_since(creation.unwrap().0);
-    match (
-        duration.num_days(),
-        duration.num_hours(),
-        duration.num_minutes(),
-        duration.num_seconds(),
-    ) {
-        (days, hours, _, _) if days > 2 => format!("{}d{}h", days, hours - 24 * days),
-        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
-        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
-        (_, _, _, secs) => format!("{}s", secs),
     }
 }
 
@@ -266,7 +245,7 @@ fn resolve_api_resource(
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
-struct Status {
+pub struct Status {
     #[serde(rename = "containerStatuses")]
     pub container_statuses: Option<Vec<ContainerStatus>>,
 
@@ -282,7 +261,7 @@ struct Status {
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
-struct Condition {
+pub struct Condition {
     #[serde(rename = "type")]
     pub type_: String,
 
@@ -290,7 +269,7 @@ struct Condition {
 }
 
 impl Status {
-    fn get_ready(&self) -> String {
+    pub fn get_ready(&self) -> String {
         if let Some(cs) = &self.container_statuses {
             let container_count = cs.len();
             let containers_ready = cs.iter().filter(|cs| cs.ready).count();
@@ -303,7 +282,7 @@ impl Status {
         String::default()
     }
 
-    fn get_status(&self) -> String {
+    pub fn get_status(&self) -> String {
         if self.phase.is_some() {
             return self.phase.clone().unwrap_or_default();
         }
