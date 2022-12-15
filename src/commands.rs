@@ -53,13 +53,10 @@ impl Cli {
         if let Some(namespace) = &self.namespace {
             ns = namespace.to_owned()
         }
-        let mut clients: Vec<Client> = Vec::new();
-        for cluster in &clusterset.clusters {
-            clients.push(Client::try_new(cluster, &ns, resource).await?)
-        }
-        let outputs = list_resources(clients).await;
+        let client = Client::try_new(&clusterset.clusters, &ns, resource).await?;
+        let lr = client.list().await?;
 
-        create_table(outputs);
+        //create_table(outputs);
         Ok(())
     }
 
@@ -73,23 +70,4 @@ impl Cli {
         config.set_namespace(ns)?;
         Config::write_config_to_defaul(serde_yaml::to_string(&config)?)
     }
-}
-
-// Fetch resources using all clients in parallel
-async fn list_resources(api: Vec<Client>) -> Vec<Output> {
-    let handles = futures::future::join_all(
-        api.into_iter()
-            .map(|client| tokio::spawn(async move { client.list().await })),
-    )
-    .await;
-
-    let mut outputs: Vec<Output> = Vec::new();
-    for handle in handles {
-        let mut output_list = handle
-            .unwrap_or_else(|_| Ok(Vec::new()))
-            .unwrap_or_default();
-        outputs.append(&mut output_list);
-    }
-
-    outputs
 }
