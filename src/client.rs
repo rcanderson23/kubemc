@@ -1,119 +1,115 @@
-use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
-use k8s_openapi::{
-    api::core::v1::ContainerStatus, apimachinery::pkg::apis::meta::v1::Time, chrono::Utc,
-};
+use anyhow::{Context, Result};
+use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
     config::Kubeconfig,
-    core::DynamicObject,
+    core::{DynamicObject, ObjectList},
     discovery::{ApiCapabilities, ApiResource, Scope},
-    Api, Client as KubeClient, Discovery, ResourceExt,
+    Api, Client as KubeClient, Discovery,
 };
 use serde::Deserialize;
 use std::fmt::Display;
+use tracing::log::{debug, warn};
 
 use crate::config::Cluster;
-use crate::output::Output;
 
 pub struct Client {
-    clustername: String,
-    kubeclient: Api<DynamicObject>,
+    kubeclients: Vec<(String, Api<DynamicObject>)>,
 }
 
-#[async_trait]
-pub trait MCClient {
-    async fn get(&self, name: String) -> Result<()>;
-    async fn list(&self) -> Result<Vec<Output>>;
+pub struct ListResponse {
+    pub clustername: String,
+    pub object_list: ObjectList<DynamicObject>,
 }
+
+//#[async_trait]
+//pub trait MCClient {
+//    async fn get(&self, name: String) -> Result<()>;
+//    async fn list(&self) -> Result<Vec<Output>>;
+//}
 
 impl Client {
-    pub async fn try_new(cluster: &Cluster, namespace: &str, resource: &str) -> Result<Self> {
-        let clustername = cluster.name.clone();
-        let kubeconfig = Kubeconfig::read()?;
-        let options = cluster.into();
+    pub async fn try_new(clusters: &Vec<Cluster>, namespace: &str, resource: &str) -> Result<Self> {
+        let mut kubeclients: Vec<(String, Api<DynamicObject>)> = Vec::new();
+        for cluster in clusters {
+            let clustername = cluster.name.clone();
+            let kubeconfig = Kubeconfig::read()?;
+            let options = cluster.into();
 
-        let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
-        let client = KubeClient::try_from(config)?;
+            let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
+            let client = KubeClient::try_from(config)?;
 
-        // Check common/known resources before using discovery
-        if let Some(r) = known_resources(resource) {
-            return Ok(create_client(clustername, client, r.0, r.1, namespace));
+            // Check common/known resources before using discovery
+            if let Some(r) = known_resources(resource) {
+                let client = create_client(client, r.0, r.1, namespace);
+                kubeclients.push((clustername, client));
+                continue;
+            }
+
+            let discovery = Discovery::new(client.clone())
+                .run()
+                .await
+                .context("failed to discover api resources")?;
+
+            let ar_cap = resolve_api_resource(&discovery, resource);
+
+            if let Some((ar, cap)) = ar_cap {
+                let client = create_client(client, ar, cap.scope, namespace);
+                kubeclients.push((clustername, client));
+            } else {
+                debug!("failed to create client for cluster {}", clustername)
+            }
         }
-
-        let discovery = Discovery::new(client.clone())
-            .run()
-            .await
-            .context("failed to discover api resources")?;
-
-        let ar_cap = resolve_api_resource(&discovery, resource);
-
-        if let Some((ar, cap)) = ar_cap {
-            Ok(create_client(clustername, client, ar, cap.scope, namespace))
-        } else {
-            Err(anyhow!("failed to find resource"))
-        }
+        Ok(Client { kubeclients })
     }
 
-    pub async fn get(&self, name: String) -> Result<()> {
-        let list = self.kubeclient.get(&name).await?.name_any();
-        println!("{:?}", list);
-        Ok(())
+    pub async fn list(self) -> Result<Vec<ListResponse>> {
+        Ok(list_resources(self, &ListParams::default()).await)
     }
+}
 
-    pub async fn list(&self) -> Result<Vec<Output>> {
-        let list = self.kubeclient.list(&ListParams::default()).await?;
-        let mut outputs: Vec<Output> = Vec::new();
-        for object in list.items {
-            let status: Status =
-                serde_json::from_value(object.data["status"].clone()).unwrap_or_default();
-            outputs.push(Output {
-                cluster: self.clustername.clone(),
-                namespace: object.namespace().unwrap_or_default(),
-                name: object.name_any(),
-                status: status.get_status(),
-                ready: status.get_ready(),
-                age: get_age(object.creation_timestamp()),
-            });
+// Fetch resources using all clients in parallel
+async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
+    let handles = futures::future::join_all(client.kubeclients.into_iter().map(|client| {
+        let lp = lp.clone();
+        tokio::spawn(async move {
+            let response = client.1.list(&lp).await;
+            (client.0, response)
+        })
+    }))
+    .await;
+
+    let mut lr: Vec<ListResponse> = Vec::new();
+    for handle in handles {
+        match handle {
+            Ok(h) => {
+                if let Ok(object_list) = h.1 {
+                    lr.push(ListResponse {
+                        clustername: h.0,
+                        object_list,
+                    })
+                } else {
+                    warn!("failed request to cluster {}", h.0)
+                }
+            }
+            Err(e) => {
+                debug!("join handle failed {}", e)
+            }
         }
-        Ok(outputs)
     }
+    lr
 }
 
 fn create_client(
-    clustername: String,
     client: KubeClient,
     ar: ApiResource,
     scope: Scope,
     ns: &str,
-) -> Client {
+) -> Api<DynamicObject> {
     if scope == Scope::Cluster {
-        Client {
-            clustername,
-            kubeclient: Api::all_with(client, &ar),
-        }
+        Api::all_with(client, &ar)
     } else {
-        Client {
-            clustername,
-            kubeclient: Api::namespaced_with(client, ns, &ar),
-        }
-    }
-}
-fn get_age(creation: Option<Time>) -> String {
-    if creation.is_none() {
-        return String::default();
-    }
-    let duration = Utc::now().signed_duration_since(creation.unwrap().0);
-    match (
-        duration.num_days(),
-        duration.num_hours(),
-        duration.num_minutes(),
-        duration.num_seconds(),
-    ) {
-        (days, hours, _, _) if days > 2 => format!("{}d{}h", days, hours - 24 * days),
-        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
-        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
-        (_, _, _, secs) => format!("{}s", secs),
+        Api::namespaced_with(client, ns, &ar)
     }
 }
 
@@ -249,7 +245,7 @@ fn resolve_api_resource(
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
-struct Status {
+pub struct Status {
     #[serde(rename = "containerStatuses")]
     pub container_statuses: Option<Vec<ContainerStatus>>,
 
@@ -265,7 +261,7 @@ struct Status {
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
-struct Condition {
+pub struct Condition {
     #[serde(rename = "type")]
     pub type_: String,
 
@@ -273,7 +269,7 @@ struct Condition {
 }
 
 impl Status {
-    fn get_ready(&self) -> String {
+    pub fn get_ready(&self) -> String {
         if let Some(cs) = &self.container_statuses {
             let container_count = cs.len();
             let containers_ready = cs.iter().filter(|cs| cs.ready).count();
@@ -286,7 +282,7 @@ impl Status {
         String::default()
     }
 
-    fn get_status(&self) -> String {
+    pub fn get_status(&self) -> String {
         if self.phase.is_some() {
             return self.phase.clone().unwrap_or_default();
         }

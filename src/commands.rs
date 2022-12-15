@@ -2,9 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use k8s_openapi::{apimachinery::pkg::apis::meta::v1::Time, chrono::Utc};
+use kube::{ResourceExt};
 
 use crate::{
-    client::Client,
+    client::{Client, Status},
     config::Config,
     output::{create_table, Output},
 };
@@ -17,11 +19,11 @@ pub struct Cli {
     pub action: Action,
 
     /// Path to config file
-    #[arg(long, short)]
+    #[arg(long, short, global = true)]
     pub config_file: Option<String>,
 
     /// Namespace to fetch resources from
-    #[arg(long, short)]
+    #[arg(long, short, global = true)]
     pub namespace: Option<String>,
 }
 
@@ -46,19 +48,30 @@ pub enum Action {
 }
 
 impl Cli {
-    pub async fn get(&self, resource: &str, name: &Option<String>) -> Result<()> {
+    pub async fn get(&self, resource: &str, _name: &Option<String>) -> Result<()> {
         let config = Config::load_config(self.config_file.as_ref())?;
         let clusterset = config.active_clusterset()?;
         let mut ns = config.active_namespace()?;
         if let Some(namespace) = &self.namespace {
             ns = namespace.to_owned()
         }
-        let mut clients: Vec<Client> = Vec::new();
-        for cluster in &clusterset.clusters {
-            clients.push(Client::try_new(cluster, &ns, resource).await?)
-        }
-        let outputs = list_resources(clients).await;
+        let client = Client::try_new(&clusterset.clusters, &ns, resource).await?;
+        let lrs = client.list().await?;
 
+        let mut outputs: Vec<Output> = Vec::new();
+        for lr in lrs {
+            let cn = lr.clustername;
+            for obj in lr.object_list{
+                let status: Status = serde_json::from_value(obj.data["status"].to_owned()).unwrap_or_default();
+                outputs.push(Output{ 
+                    cluster: cn.to_owned(), 
+                    namespace: obj.namespace().unwrap_or_default(), 
+                    name: obj.name_any(), status: status.get_status(),
+                    ready: status.get_ready(), 
+                    age: get_age(obj.creation_timestamp())
+                });
+            }
+        }
         create_table(outputs);
         Ok(())
     }
@@ -75,21 +88,20 @@ impl Cli {
     }
 }
 
-// Fetch resources using all clients in parallel
-async fn list_resources(api: Vec<Client>) -> Vec<Output> {
-    let handles = futures::future::join_all(
-        api.into_iter()
-            .map(|client| tokio::spawn(async move { client.list().await })),
-    )
-    .await;
-
-    let mut outputs: Vec<Output> = Vec::new();
-    for handle in handles {
-        let mut output_list = handle
-            .unwrap_or_else(|_| Ok(Vec::new()))
-            .unwrap_or_default();
-        outputs.append(&mut output_list);
+fn get_age(creation: Option<Time>) -> String {
+    if creation.is_none() {
+        return String::default();
     }
-
-    outputs
+    let duration = Utc::now().signed_duration_since(creation.unwrap().0);
+    match (
+        duration.num_days(),
+        duration.num_hours(),
+        duration.num_minutes(),
+        duration.num_seconds(),
+    ) {
+        (days, hours, _, _) if days > 2 => format!("{}d{}h", days, hours - 24 * days),
+        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
+        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
+        (_, _, _, secs) => format!("{}s", secs),
+    }
 }
