@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
-    config::Kubeconfig,
+    config::{KubeConfigOptions, Kubeconfig},
     core::{DynamicObject, ObjectList},
     discovery::{ApiCapabilities, ApiResource, Scope},
-    Api, Client as KubeClient, Discovery,
+    Api, Client as KubeClient, Config, Discovery,
 };
 use serde::Deserialize;
 use std::fmt::Display;
@@ -22,31 +22,34 @@ pub struct ListResponse {
     pub object_list: ObjectList<DynamicObject>,
 }
 
-//#[async_trait]
-//pub trait MCClient {
-//    async fn get(&self, name: String) -> Result<()>;
-//    async fn list(&self) -> Result<Vec<Output>>;
-//}
-
 impl Client {
     pub async fn try_new(clusters: &Vec<Cluster>, namespace: &str, resource: &str) -> Result<Self> {
+        let kubeconfig = Kubeconfig::read()?;
+
+        let configs = create_configs(clusters, kubeconfig).await;
+        let handles = futures::future::join_all(configs.into_iter().map(move |config| {
+            tokio::spawn(async move { (config.0, KubeClient::try_from(config.1)) })
+        }))
+        .await;
+        let mut raw_clients: Vec<(String, KubeClient)> = Vec::new();
+        for handle in handles {
+            match handle {
+                Ok((cn, Ok(c))) => raw_clients.push((cn, c)),
+                Ok((cn, Err(e))) => warn!("failed to create client for {cn}: {e}"),
+                Err(e) => warn!("failed to join handles {e}"),
+            }
+        }
+
         let mut kubeclients: Vec<(String, Api<DynamicObject>)> = Vec::new();
-        for cluster in clusters {
-            let clustername = cluster.name.clone();
-            let kubeconfig = Kubeconfig::read()?;
-            let options = cluster.into();
-
-            let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
-            let client = KubeClient::try_from(config)?;
-
+        for raw_client in raw_clients {
             // Check common/known resources before using discovery
             if let Some(r) = known_resources(resource) {
-                let client = create_client(client, r.0, r.1, namespace);
-                kubeclients.push((clustername, client));
+                let client = create_client(raw_client.1, r.0, r.1, namespace);
+                kubeclients.push((raw_client.0, client));
                 continue;
             }
 
-            let discovery = Discovery::new(client.clone())
+            let discovery = Discovery::new(raw_client.1.clone())
                 .run()
                 .await
                 .context("failed to discover api resources")?;
@@ -54,18 +57,35 @@ impl Client {
             let ar_cap = resolve_api_resource(&discovery, resource);
 
             if let Some((ar, cap)) = ar_cap {
-                let client = create_client(client, ar, cap.scope, namespace);
-                kubeclients.push((clustername, client));
+                let client = create_client(raw_client.1, ar, cap.scope, namespace);
+                kubeclients.push((raw_client.0, client));
             } else {
-                debug!("failed to create client for cluster {}", clustername)
+                debug!("failed to create client for cluster {}", raw_client.0)
             }
         }
         Ok(Client { kubeclients })
     }
 
     pub async fn list(self) -> Result<Vec<ListResponse>> {
-        Ok(list_resources(self, &ListParams::default()).await)
+        let now = tokio::time::Instant::now();
+        let lrs = list_resources(self, &ListParams::default()).await;
+        println!("Time to make requests {:?}", now.elapsed());
+        Ok(lrs)
     }
+}
+
+// Create the necessary clustername config tuples from provided clusters and kubeconfig
+async fn create_configs(clusters: &Vec<Cluster>, kubeconfig: Kubeconfig) -> Vec<(String, Config)> {
+    let mut configs = Vec::new();
+    for cluster in clusters {
+        let clustername = cluster.name.clone();
+        let options: KubeConfigOptions = cluster.into();
+        if let Ok(c) = Config::from_custom_kubeconfig(kubeconfig.clone(), &options).await {
+            configs.push((clustername, c));
+        }
+    }
+
+    configs
 }
 
 // Fetch resources using all clients in parallel
@@ -82,15 +102,12 @@ async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
     let mut lr: Vec<ListResponse> = Vec::new();
     for handle in handles {
         match handle {
-            Ok(h) => {
-                if let Ok(object_list) = h.1 {
-                    lr.push(ListResponse {
-                        clustername: h.0,
-                        object_list,
-                    })
-                } else {
-                    warn!("failed request to cluster {}", h.0)
-                }
+            Ok((clustername, Ok(object_list))) => lr.push(ListResponse {
+                clustername,
+                object_list,
+            }),
+            Ok((clustername, Err(e))) => {
+                debug!("request failed to cluster {} due to {}", clustername, e)
             }
             Err(e) => {
                 debug!("join handle failed {}", e)

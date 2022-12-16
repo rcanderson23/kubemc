@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use k8s_openapi::{apimachinery::pkg::apis::meta::v1::Time, chrono::Utc};
-use kube::{ResourceExt};
+use kube::ResourceExt;
 
 use crate::{
     client::{Client, Status},
@@ -55,24 +55,33 @@ impl Cli {
         if let Some(namespace) = &self.namespace {
             ns = namespace.to_owned()
         }
+        let client_build = tokio::time::Instant::now();
         let client = Client::try_new(&clusterset.clusters, &ns, resource).await?;
+        println!("Time to build client {:?}", client_build.elapsed());
         let lrs = client.list().await?;
+
+        let build_output = tokio::time::Instant::now();
 
         let mut outputs: Vec<Output> = Vec::new();
         for lr in lrs {
             let cn = lr.clustername;
-            for obj in lr.object_list{
-                let status: Status = serde_json::from_value(obj.data["status"].to_owned()).unwrap_or_default();
-                outputs.push(Output{ 
-                    cluster: cn.to_owned(), 
-                    namespace: obj.namespace().unwrap_or_default(), 
-                    name: obj.name_any(), status: status.get_status(),
-                    ready: status.get_ready(), 
-                    age: get_age(obj.creation_timestamp())
+            for obj in lr.object_list {
+                let status: Status =
+                    serde_json::from_value(obj.data["status"].to_owned()).unwrap_or_default();
+                outputs.push(Output {
+                    cluster: cn.to_owned(),
+                    namespace: obj.namespace().unwrap_or_default(),
+                    name: obj.name_any(),
+                    status: status.get_status(),
+                    ready: status.get_ready(),
+                    age: get_age(obj.creation_timestamp()),
                 });
             }
         }
+        println!("Time to build output {:?}", build_output.elapsed());
+        let table = tokio::time::Instant::now();
         create_table(outputs);
+        println!("Time to build table {:?}", table.elapsed());
         Ok(())
     }
 
