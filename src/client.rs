@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
@@ -70,34 +71,58 @@ impl Client {
 
 // Fetch resources using all clients in parallel
 async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
-    let handles = futures::future::join_all(client.kubeclients.into_iter().map(|client| {
+    let req_count = client.kubeclients.len();
+    let bodies = futures::stream::iter(client.kubeclients).map(|client| {
         let lp = lp.clone();
         tokio::spawn(async move {
             let response = client.1.list(&lp).await;
             (client.0, response)
         })
-    }))
-    .await;
+    }).buffer_unordered(req_count);
+    //let mut lrs: Vec<ListResponse> = Vec::new();
+    let lrs = bodies.for_each(|b| async {
 
-    let mut lr: Vec<ListResponse> = Vec::new();
-    for handle in handles {
-        match handle {
-            Ok(h) => {
-                if let Ok(object_list) = h.1 {
-                    lr.push(ListResponse {
-                        clustername: h.0,
-                        object_list,
-                    })
-                } else {
-                    warn!("failed request to cluster {}", h.0)
-                }
-            }
-            Err(e) => {
-                debug!("join handle failed {}", e)
-            }
+        let mut lrs: Vec<ListResponse> = Vec::new();
+        match b {
+            Ok((cn, Ok(resp))) => {
+                lrs.push(ListResponse{
+                    clustername: cn,
+                    object_list: resp,
+                })
+            },
+            Ok((_, Err(_e))) => {},
+            Err(_) => todo!(),
         }
-    }
-    lr
+        lrs
+    }).await;
+    //let handles = futures::future::join_all(client.kubeclients.into_iter().map(|client| {
+    //    let lp = lp.clone();
+    //    tokio::spawn(async move {
+    //        let response = client.1.list(&lp).await;
+    //        (client.0, response)
+    //    })
+    //}))
+    //.await;
+
+    //let mut lr: Vec<ListResponse> = Vec::new();
+    //for handle in handles {
+    //    match handle {
+    //        Ok(h) => {
+    //            if let Ok(object_list) = h.1 {
+    //                lr.push(ListResponse {
+    //                    clustername: h.0,
+    //                    object_list,
+    //                })
+    //            } else {
+    //                warn!("failed request to cluster {}", h.0)
+    //            }
+    //        }
+    //        Err(e) => {
+    //            debug!("join handle failed {}", e)
+    //        }
+    //    }
+    //}
+    lrs
 }
 
 fn create_client(
