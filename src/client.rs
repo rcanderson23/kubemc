@@ -26,6 +26,8 @@ impl Client {
     pub async fn try_new(clusters: &Vec<Cluster>, namespace: &str, resource: &str) -> Result<Self> {
         let kubeconfig = Kubeconfig::read()?;
 
+        // This creates the raw kube clients in parallel. In testing it takes about 150-200ms per
+        // client which is noticeable if you have a lot of clusters configured in the clusterset.
         let configs = create_configs(clusters, kubeconfig).await;
         let handles = futures::future::join_all(configs.into_iter().map(move |config| {
             tokio::spawn(async move { (config.0, KubeClient::try_from(config.1)) })
@@ -40,9 +42,11 @@ impl Client {
             }
         }
 
+        // Create the client
         let mut kubeclients: Vec<(String, Api<DynamicObject>)> = Vec::new();
         for raw_client in raw_clients {
-            // Check common/known resources before using discovery
+            // Check common/known resources before using discovery. Discovery can add a lot of
+            // latency to target client creation.
             if let Some(r) = known_resources(resource) {
                 let client = create_client(raw_client.1, r.0, r.1, namespace);
                 kubeclients.push((raw_client.0, client));
