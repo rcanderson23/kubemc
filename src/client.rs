@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
@@ -8,13 +8,16 @@ use kube::{
     Api, Client as KubeClient, Discovery,
 };
 use serde::Deserialize;
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 use tracing::log::{debug, warn};
 
 use crate::config::Cluster;
 
+type ClusterName = String;
+type MCCluster = (ClusterName, Api<DynamicObject>);
+
 pub struct Client {
-    kubeclients: Vec<(String, Api<DynamicObject>)>,
+    kubeclients: Vec<MCCluster>,
 }
 
 pub struct ListResponse {
@@ -22,42 +25,25 @@ pub struct ListResponse {
     pub object_list: ObjectList<DynamicObject>,
 }
 
-//#[async_trait]
-//pub trait MCClient {
-//    async fn get(&self, name: String) -> Result<()>;
-//    async fn list(&self) -> Result<Vec<Output>>;
-//}
-
 impl Client {
     pub async fn try_new(clusters: &Vec<Cluster>, namespace: &str, resource: &str) -> Result<Self> {
-        let mut kubeclients: Vec<(String, Api<DynamicObject>)> = Vec::new();
-        for cluster in clusters {
-            let clustername = cluster.name.clone();
-            let kubeconfig = Kubeconfig::read()?;
-            let options = cluster.into();
-
-            let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
-            let client = KubeClient::try_from(config)?;
-
-            // Check common/known resources before using discovery
-            if let Some(r) = known_resources(resource) {
-                let client = create_client(client, r.0, r.1, namespace);
-                kubeclients.push((clustername, client));
-                continue;
-            }
-
-            let discovery = Discovery::new(client.clone())
-                .run()
-                .await
-                .context("failed to discover api resources")?;
-
-            let ar_cap = resolve_api_resource(&discovery, resource);
-
-            if let Some((ar, cap)) = ar_cap {
-                let client = create_client(client, ar, cap.scope, namespace);
-                kubeclients.push((clustername, client));
-            } else {
-                debug!("failed to create client for cluster {}", clustername)
+        let kubeconfig = Kubeconfig::read()?;
+        let handles = futures::future::join_all(clusters.iter().map(|cluster| {
+            let kubeconfig = kubeconfig.clone();
+            let cluster = cluster.clone();
+            let ns = Arc::new(namespace.to_owned());
+            let r = Arc::new(resource.to_owned());
+            tokio::spawn(async move {
+                create_client(kubeconfig, cluster, &ns.clone(), &r.clone()).await
+            })
+        }))
+        .await;
+        let mut kubeclients: Vec<MCCluster> = Vec::new();
+        for handle in handles {
+            match handle {
+                Ok(Ok(mcclient)) => kubeclients.push(mcclient),
+                Ok(Err(e)) => warn!("failed to create client {}", e),
+                Err(e) => debug!("join failed {}", e),
             }
         }
         Ok(Client { kubeclients })
@@ -65,6 +51,42 @@ impl Client {
 
     pub async fn list(self) -> Result<Vec<ListResponse>> {
         Ok(list_resources(self, &ListParams::default()).await)
+    }
+}
+
+async fn create_client(
+    kubeconfig: Kubeconfig,
+    cluster: Cluster,
+    namespace: &str,
+    resource: &str,
+) -> Result<MCCluster> {
+    let clustername = cluster.name.clone();
+    let options = cluster.into();
+
+    let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
+    let client = KubeClient::try_from(config)?;
+
+    // Check common/known resources before using discovery
+    if let Some(r) = known_resources(resource) {
+        let client = create_typed_kubeclient(client, r.0, r.1, namespace);
+        return Ok((clustername, client));
+    }
+
+    let discovery = Discovery::new(client.clone())
+        .run()
+        .await
+        .context("failed to discover api resources")?;
+
+    let ar_cap = resolve_api_resource(&discovery, resource);
+
+    if let Some((ar, cap)) = ar_cap {
+        let client = create_typed_kubeclient(client, ar, cap.scope, namespace);
+        Ok((clustername, client))
+    } else {
+        Err(anyhow!(
+            "failed to create client for cluster {}",
+            clustername
+        ))
     }
 }
 
@@ -100,7 +122,7 @@ async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
     lr
 }
 
-fn create_client(
+fn create_typed_kubeclient(
     client: KubeClient,
     ar: ApiResource,
     scope: Scope,
