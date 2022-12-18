@@ -26,7 +26,7 @@ pub struct ListResponse {
 }
 
 impl Client {
-    pub async fn try_new(clusters: &Vec<Cluster>, namespace: &str, resource: &str) -> Result<Self> {
+    pub async fn try_new(clusters: &[Cluster], namespace: &str, resource: &str) -> Result<Self> {
         let kubeconfig = Kubeconfig::read()?;
         let handles = futures::future::join_all(clusters.iter().map(|cluster| {
             let kubeconfig = kubeconfig.clone();
