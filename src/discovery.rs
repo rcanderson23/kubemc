@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use async_recursion::async_recursion;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tracing::log::debug;
@@ -22,7 +21,7 @@ pub struct DiscoveryResource {
 
 impl Discovery {
     /// Creates a
-    pub async fn new_from_default_cache(url: String) -> Result<Self> {
+    pub fn new_from_default_cache(url: String) -> Result<Self> {
         let mut resources = Vec::new();
         let host_path = parse_kube_url_to_discovery(url)?;
         let paths = get_cache_files(
@@ -32,9 +31,8 @@ impl Discovery {
                 .join("cache")
                 .join("discovery")
                 .join(host_path),
-        )
-        .await?;
-        let files = read_cache_files(paths).await;
+        )?;
+        let files = read_cache_files(paths);
         for file in &files {
             match ApiResourceList::try_from_str(file) {
                 Ok(arl) => resources.append(&mut arl.get_api_resources()),
@@ -67,14 +65,13 @@ pub fn parse_kube_url_to_discovery(url: String) -> Result<String> {
     Ok(re.replace_all(&hp, "_").to_string())
 }
 
-#[async_recursion]
-async fn get_cache_files<P: AsRef<Path> + Send>(path: P) -> Result<Vec<PathBuf>> {
+fn get_cache_files<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
-    let mut entries = tokio::fs::read_dir(path).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        if let Ok(file_type) = entry.file_type().await {
+    let mut entries = std::fs::read_dir(path)?;
+    while let Some(Ok(entry)) = entries.next() {
+        if let Ok(file_type) = entry.file_type() {
             if file_type.is_dir() {
-                let mut recurse_entries = get_cache_files(entry.path()).await?;
+                let mut recurse_entries = get_cache_files(entry.path())?;
                 files.append(&mut recurse_entries)
             } else if file_type.is_file() && is_json(&entry.path()) {
                 files.push(entry.path())
@@ -84,10 +81,10 @@ async fn get_cache_files<P: AsRef<Path> + Send>(path: P) -> Result<Vec<PathBuf>>
     Ok(files)
 }
 
-async fn read_cache_files(paths: Vec<PathBuf>) -> Vec<String> {
+fn read_cache_files(paths: Vec<PathBuf>) -> Vec<String> {
     let mut file_outs: Vec<String> = Vec::new();
     for path in paths {
-        if let Ok(file_out) = tokio::fs::read_to_string(path).await {
+        if let Ok(file_out) = std::fs::read_to_string(path) {
             file_outs.push(file_out);
         }
     }
@@ -194,7 +191,6 @@ mod test {
         let _files = get_cache_files(
             "/home/randerson/.kube/cache/discovery/carson.cloud.gravitational.io_443/",
         )
-        .await
         .unwrap();
     }
 
@@ -225,7 +221,6 @@ mod test {
         let now = tokio::time::Instant::now();
         let dis =
             Discovery::new_from_default_cache("https://carson.cloud.gravitational.io:443".into())
-                .await
                 .unwrap();
         let ds = dis.get_resource_from_name("DaemonSet").unwrap();
         println!("time taken to parse and find resource {:?}", now.elapsed());
