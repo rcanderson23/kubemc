@@ -63,8 +63,7 @@ async fn create_client(
     let clustername = cluster.name.clone();
     let options = cluster.into();
 
-    let discovery =
-        Discovery::new_from_default_cache(get_cluster_endpoint(&kubeconfig, &options)?).await;
+    let discovery = Discovery::new_from_default_cache(get_cluster_endpoint(&kubeconfig, &options)?);
     let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
     let client = KubeClient::try_from(config)?;
 
