@@ -67,8 +67,8 @@ pub fn parse_kube_url_to_discovery(url: String) -> Result<String> {
     Ok(re.replace_all(&hp, "_").to_string())
 }
 
-#[async_recursion(?Send)]
-async fn get_cache_files<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
+#[async_recursion]
+async fn get_cache_files<P: AsRef<Path> + Send>(path: P) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut entries = tokio::fs::read_dir(path).await?;
     while let Some(entry) = entries.next_entry().await? {
@@ -122,7 +122,7 @@ impl ApiResourceList {
     fn get_api_resources(&self) -> Vec<DiscoveryResource> {
         let group = match self.group_version.split_once('/') {
             Some(g) => g.0,
-            None => &self.group_version,
+            None => "",
         };
         let mut resource_list = Vec::new();
         for resource in &self.resources {

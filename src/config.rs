@@ -48,12 +48,11 @@ impl Config {
     }
 
     pub fn active_clusterset(&self) -> Result<&Clusterset> {
-        for clusterset in &self.clustersets {
-            if clusterset.name == self.current_clusterset {
-                return Ok(clusterset);
-            }
-        }
-        Err(anyhow!("clusterset {} not found", self.current_clusterset))
+        self
+            .clustersets
+            .iter()
+            .find(|clusterset| clusterset.name == self.current_clusterset)
+            .ok_or_else(|| anyhow!("clusterset {} not found", self.current_clusterset))
     }
 
     pub fn active_namespace(&self) -> Result<String> {
@@ -64,14 +63,16 @@ impl Config {
     }
 
     pub fn set_namespace(&mut self, ns: &str) -> Result<()> {
-        for mut clusterset in &mut self.clustersets {
-            if clusterset.name == self.current_clusterset {
-                clusterset.namespace = ns.to_owned();
-                return Ok(());
-            }
+        if let Some(clusterset) = &mut self
+            .clustersets
+            .iter_mut()
+            .find(|clusterset| clusterset.name == self.current_clusterset)
+        {
+            clusterset.namespace = ns.to_owned();
+            Ok(())
+        } else {
+            Err(anyhow!("failed to find active cluster"))
         }
-
-        Err(anyhow!("failed to find active cluster"))
     }
 
     /// Load from specified path, then environment variable, or finally default location

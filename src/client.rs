@@ -2,16 +2,16 @@ use anyhow::{anyhow, Context, Result};
 use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
-    config::Kubeconfig,
+    config::{KubeConfigOptions, Kubeconfig},
     core::{DynamicObject, ObjectList},
     discovery::{ApiCapabilities, ApiResource, Scope},
-    Api, Client as KubeClient, Discovery,
+    Api, Client as KubeClient, Discovery as KubeDiscovery,
 };
 use serde::Deserialize;
 use std::{fmt::Display, sync::Arc};
 use tracing::log::{debug, warn};
 
-use crate::config::Cluster;
+use crate::{config::Cluster, discovery::Discovery};
 
 type ClusterName = String;
 type MCCluster = (ClusterName, Api<DynamicObject>);
@@ -63,21 +63,30 @@ async fn create_client(
     let clustername = cluster.name.clone();
     let options = cluster.into();
 
+    let discovery =
+        Discovery::new_from_default_cache(get_cluster_endpoint(&kubeconfig, &options)?).await;
     let config = kube::config::Config::from_custom_kubeconfig(kubeconfig, &options).await?;
     let client = KubeClient::try_from(config)?;
 
-    // Check common/known resources before using discovery
-    if let Some(r) = known_resources(resource) {
-        let client = create_typed_kubeclient(client, r.0, r.1, namespace);
-        return Ok((clustername, client));
+    // if cached discovery succeeded and the requested resource is present, use it to make the
+    // request. Otherwise fall back to discovery via k8s api.
+    if let Ok(discovery) = discovery {
+        if let Ok((resource, scope)) = discovery.get_resource_from_name(resource) {
+            debug!(
+                "creating client for cluster {} for resource {} with scope {:?}",
+                &clustername, &resource.kind, &scope
+            );
+            let client = create_typed_kubeclient(client, resource, scope, namespace);
+            return Ok((clustername, client));
+        }
     }
 
-    let discovery = Discovery::new(client.clone())
+    let kube_discovery = KubeDiscovery::new(client.clone())
         .run()
         .await
         .context("failed to discover api resources")?;
 
-    let ar_cap = resolve_api_resource(&discovery, resource);
+    let ar_cap = resolve_api_resource(&kube_discovery, resource);
 
     if let Some((ar, cap)) = ar_cap {
         let client = create_typed_kubeclient(client, ar, cap.scope, namespace);
@@ -88,6 +97,46 @@ async fn create_client(
             clustername
         ))
     }
+}
+
+fn get_cluster_endpoint(kubeconfig: &Kubeconfig, options: &KubeConfigOptions) -> Result<String> {
+    if let Some(cluster) = &options.cluster {
+        get_server_endpoint_from_kubeconfig(kubeconfig, cluster)
+    } else if let Some(ctx) = &options.context {
+        let cluster = get_cluster_from_context(kubeconfig, ctx)?;
+        get_server_endpoint_from_kubeconfig(kubeconfig, &cluster)
+    } else {
+        Err(anyhow!("failed to find cluster"))
+    }
+}
+
+// Returns the cluster name from the specified context
+fn get_cluster_from_context(kubeconfig: &Kubeconfig, ctx: &str) -> Result<String> {
+    kubeconfig
+        .contexts
+        .iter()
+        .find(|named_context| named_context.name == ctx)
+        .and_then(|named_context| named_context.context.clone())
+        .map(|context| context.cluster)
+        .ok_or_else(|| anyhow!("failed to find context {} in kubeconfig", ctx))
+}
+// Returns the server endpoint from a kubeconfig given a cluster
+fn get_server_endpoint_from_kubeconfig(
+    kubeconfig: &Kubeconfig,
+    cluster_name: &str,
+) -> Result<String> {
+    kubeconfig
+        .clusters
+        .iter()
+        .find(|named_cluster| named_cluster.name == cluster_name)
+        .and_then(|name_cluster| name_cluster.cluster.clone())
+        .and_then(|cluster| cluster.server)
+        .ok_or_else(|| {
+            anyhow!(
+                "failed to get cluster endpoint for cluster {}",
+                cluster_name
+            )
+        })
 }
 
 // Fetch resources using all clients in parallel
@@ -135,6 +184,7 @@ fn create_typed_kubeclient(
     }
 }
 
+#[allow(unused)]
 // Check for commonly used resources and short names before using discovery api
 fn known_resources(resource: &str) -> Option<(ApiResource, Scope)> {
     match resource {
@@ -243,7 +293,7 @@ fn known_resources(resource: &str) -> Option<(ApiResource, Scope)> {
 }
 
 fn resolve_api_resource(
-    discovery: &Discovery,
+    discovery: &KubeDiscovery,
     name: &str,
 ) -> Option<(ApiResource, ApiCapabilities)> {
     // iterate through groups to find matching kind/plural names at recommended versions
