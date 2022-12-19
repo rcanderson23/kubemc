@@ -93,7 +93,8 @@ async fn create_client(
         Ok((clustername, client))
     } else {
         Err(anyhow!(
-            "failed to create client for cluster {}",
+            "discovery of resource {} failed for cluster {}",
+            resource,
             clustername
         ))
     }
