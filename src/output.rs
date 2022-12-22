@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
 use k8s_openapi::{
-    api::core::v1::ContainerStatus, apimachinery::pkg::apis::meta::v1::Time, chrono::Utc,
+    api::core::v1::{ContainerStatus, NodeStatus},
+    apimachinery::pkg::apis::meta::v1::Time,
+    chrono::Utc,
 };
 use kube::{core::DynamicObject, ResourceExt};
 use serde::Deserialize;
@@ -29,34 +31,54 @@ pub enum KubeOutput {
     Default_(#[tabled(inline)] DefaultOutput),
 }
 
-#[derive(Tabled, Clone, Debug)]
+#[derive(Tabled, Clone, Debug, Default)]
 #[tabled(rename_all = "UPPERCASE")]
 pub struct NodeOutput {
     pub clustername: String,
     pub name: String,
-    pub phase: String,
     pub status: String,
     pub age: String,
+    pub version: String,
+    pub arch: String,
+    pub kernel: String,
+    pub container_runtime_version: String,
 }
 
 impl From<DynamicObject> for NodeOutput {
     fn from(d: DynamicObject) -> Self {
         if let Some(status) = d.data.get("status") {
-            let status: Status = serde_json::from_value(status.to_owned()).unwrap_or_default();
+            let status: NodeStatus = serde_json::from_value(status.to_owned()).unwrap_or_default();
+            let node_info = status.node_info.clone().unwrap_or_default();
+            let conditions = status.conditions.unwrap_or_default();
             Self {
                 clustername: "".into(),
                 name: d.name_any(),
-                phase: status.phase.clone().unwrap_or_default(),
-                status: status.get_status(),
+                status: conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "Ready")
+                    .map_or_else(
+                        || "Unknown".to_string(),
+                        |condition| {
+                            if condition.status == "True" {
+                                "Ready".to_string()
+                            } else {
+                                "NotReady".to_string()
+                            }
+                        },
+                    ),
                 age: get_age(d.metadata.creation_timestamp),
+                version: node_info.kubelet_version,
+                arch: node_info.architecture,
+                kernel: node_info.kernel_version,
+                container_runtime_version: node_info.container_runtime_version,
             }
         } else {
             Self {
                 clustername: "".into(),
                 name: d.name_any(),
-                phase: "unknown".into(),
-                status: "unknown".into(),
+                status: "Unknown".into(),
                 age: get_age(d.metadata.creation_timestamp),
+                ..Default::default()
             }
         }
     }
