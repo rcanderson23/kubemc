@@ -2,13 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use k8s_openapi::{apimachinery::pkg::apis::meta::v1::Time, chrono::Utc};
-use kube::{ResourceExt};
 
 use crate::{
-    client::{Client, Status},
+    client::Client,
     config::Config,
-    output::{create_table, Output},
+    output::{convert_list_response_to_table, create_table},
 };
 
 #[derive(Debug, Parser)]
@@ -58,19 +56,10 @@ impl Cli {
         let client = Client::try_new(&clusterset.clusters, &ns, resource).await?;
         let lrs = client.list().await?;
 
-        let mut outputs: Vec<Output> = Vec::new();
+        let mut outputs = Vec::new();
+
         for lr in lrs {
-            let cn = lr.clustername;
-            for obj in lr.object_list{
-                let status: Status = serde_json::from_value(obj.data["status"].to_owned()).unwrap_or_default();
-                outputs.push(Output{ 
-                    cluster: cn.to_owned(), 
-                    namespace: obj.namespace().unwrap_or_default(), 
-                    name: obj.name_any(), status: status.get_status(),
-                    ready: status.get_ready(), 
-                    age: get_age(obj.creation_timestamp())
-                });
-            }
+            outputs.append(&mut convert_list_response_to_table(lr))
         }
         create_table(outputs);
         Ok(())
@@ -85,23 +74,5 @@ impl Cli {
         let mut config = Config::load_config_from_default_file()?;
         config.set_namespace(ns)?;
         Config::write_config_to_defaul(serde_yaml::to_string(&config)?)
-    }
-}
-
-fn get_age(creation: Option<Time>) -> String {
-    if creation.is_none() {
-        return String::default();
-    }
-    let duration = Utc::now().signed_duration_since(creation.unwrap().0);
-    match (
-        duration.num_days(),
-        duration.num_hours(),
-        duration.num_minutes(),
-        duration.num_seconds(),
-    ) {
-        (days, hours, _, _) if days > 2 => format!("{}d{}h", days, hours - 24 * days),
-        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
-        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
-        (_, _, _, secs) => format!("{}s", secs),
     }
 }

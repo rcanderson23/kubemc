@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use k8s_openapi::api::core::v1::ContainerStatus;
 use kube::{
     api::ListParams,
     config::{KubeConfigOptions, Kubeconfig},
@@ -7,21 +6,23 @@ use kube::{
     discovery::{ApiCapabilities, ApiResource, Scope},
     Api, Client as KubeClient, Discovery as KubeDiscovery,
 };
-use serde::Deserialize;
-use std::{fmt::Display, sync::Arc};
+use std::sync::Arc;
 use tracing::log::{debug, warn};
 
 use crate::{config::Cluster, discovery::Discovery};
 
 type ClusterName = String;
-type MCCluster = (ClusterName, Api<DynamicObject>);
+type Kind = String;
+type MCCluster = (ClusterName, Api<DynamicObject>, Kind);
 
 pub struct Client {
+    pub kind: String,
     kubeclients: Vec<MCCluster>,
 }
 
 pub struct ListResponse {
     pub clustername: String,
+    pub kind: String,
     pub object_list: ObjectList<DynamicObject>,
 }
 
@@ -38,15 +39,19 @@ impl Client {
             })
         }))
         .await;
+        let mut kind = String::new();
         let mut kubeclients: Vec<MCCluster> = Vec::new();
         for handle in handles {
             match handle {
-                Ok(Ok(mcclient)) => kubeclients.push(mcclient),
+                Ok(Ok(mcclient)) => {
+                    kind = mcclient.2.clone();
+                    kubeclients.push(mcclient)
+                }
                 Ok(Err(e)) => warn!("failed to create client {}", e),
                 Err(e) => debug!("join failed {}", e),
             }
         }
-        Ok(Client { kubeclients })
+        Ok(Client { kind, kubeclients })
     }
 
     pub async fn list(self) -> Result<Vec<ListResponse>> {
@@ -75,8 +80,9 @@ async fn create_client(
                 "creating client for cluster {} for resource {} with scope {:?}",
                 &clustername, &resource.kind, &scope
             );
+            let kind = resource.kind.clone();
             let client = create_typed_kubeclient(client, resource, scope, namespace);
-            return Ok((clustername, client));
+            return Ok((clustername, client, kind));
         }
     }
 
@@ -88,8 +94,9 @@ async fn create_client(
     let ar_cap = resolve_api_resource(&kube_discovery, resource);
 
     if let Some((ar, cap)) = ar_cap {
+        let kind = ar.kind.clone();
         let client = create_typed_kubeclient(client, ar, cap.scope, namespace);
-        Ok((clustername, client))
+        Ok((clustername, client, kind))
     } else {
         Err(anyhow!(
             "discovery of resource {} failed for cluster {}",
@@ -141,6 +148,7 @@ fn get_server_endpoint_from_kubeconfig(
 
 // Fetch resources using all clients in parallel
 async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
+    let kind = client.kind;
     let handles = futures::future::join_all(client.kubeclients.into_iter().map(|client| {
         let lp = lp.clone();
         tokio::spawn(async move {
@@ -157,6 +165,7 @@ async fn list_resources(client: Client, lp: &ListParams) -> Vec<ListResponse> {
                 if let Ok(object_list) = h.1 {
                     lr.push(ListResponse {
                         clustername: h.0,
+                        kind: kind.clone(),
                         object_list,
                     })
                 } else {
@@ -184,114 +193,6 @@ fn create_typed_kubeclient(
     }
 }
 
-#[allow(unused)]
-// Check for commonly used resources and short names before using discovery api
-fn known_resources(resource: &str) -> Option<(ApiResource, Scope)> {
-    match resource {
-        "po" | "pod" | "pods" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "Pod".into(),
-                plural: "pods".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "no" | "node" | "nodes" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "Node".into(),
-                plural: "nodes".into(),
-            },
-            Scope::Cluster,
-        )),
-        "cm" | "configmap" | "configmaps" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "ConfigMap".into(),
-                plural: "configmaps".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "deploy" | "deployment" | "deployments" => Some((
-            ApiResource {
-                group: "apps".into(),
-                version: "v1".into(),
-                api_version: "apps/v1".into(),
-                kind: "Deployment".into(),
-                plural: "deployments".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "ds" | "daemonset" | "daemonsets" => Some((
-            ApiResource {
-                group: "apps".into(),
-                version: "v1".into(),
-                api_version: "apps/v1".into(),
-                kind: "DaemonSet".into(),
-                plural: "daemonsets".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "pvc" | "persistentvolumeclaim" | "persistentvolumeclaims" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "PersistentVolumeClaim".into(),
-                plural: "PersistentVolumeClaims".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "rs" | "replicaset" | "replicasets" => Some((
-            ApiResource {
-                group: "apps".into(),
-                version: "v1".into(),
-                api_version: "apps/v1".into(),
-                kind: "ReplicaSet".into(),
-                plural: "replicasets".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "sts" | "statefulset" | "statefulsets" => Some((
-            ApiResource {
-                group: "apps".into(),
-                version: "v1".into(),
-                api_version: "apps/v1".into(),
-                kind: "StatefulSet".into(),
-                plural: "statefulsets".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "svc" | "service" | "services" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "Service".into(),
-                plural: "services".into(),
-            },
-            Scope::Namespaced,
-        )),
-        "secret" | "secrets" => Some((
-            ApiResource {
-                group: "".into(),
-                version: "v1".into(),
-                api_version: "v1".into(),
-                kind: "Secret".into(),
-                plural: "secrets".into(),
-            },
-            Scope::Namespaced,
-        )),
-        _ => None,
-    }
-}
-
 fn resolve_api_resource(
     discovery: &KubeDiscovery,
     name: &str,
@@ -314,78 +215,4 @@ fn resolve_api_resource(
         })
         .min_by_key(|(group, _res)| group.name())
         .map(|(_, res)| res)
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Status {
-    #[serde(rename = "containerStatuses")]
-    pub container_statuses: Option<Vec<ContainerStatus>>,
-
-    pub phase: Option<String>,
-
-    pub replicas: Option<u16>,
-
-    // Node conditions
-    pub conditions: Option<Vec<Condition>>,
-
-    #[serde(rename = "readyReplicas")]
-    pub ready_replicas: Option<u16>,
-}
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct Condition {
-    #[serde(rename = "type")]
-    pub type_: String,
-
-    pub status: String,
-}
-
-impl Status {
-    pub fn get_ready(&self) -> String {
-        if let Some(cs) = &self.container_statuses {
-            let container_count = cs.len();
-            let containers_ready = cs.iter().filter(|cs| cs.ready).count();
-            return format!("{}/{}", containers_ready, container_count);
-        }
-        if let (Some(ready_rep), Some(rep)) = (&self.ready_replicas, &self.replicas) {
-            return format!("{}/{}", ready_rep, rep);
-        }
-
-        String::default()
-    }
-
-    pub fn get_status(&self) -> String {
-        if self.phase.is_some() {
-            return self.phase.clone().unwrap_or_default();
-        }
-
-        match &self.conditions {
-            Some(c) => {
-                let mut status = String::new();
-                for condition in c {
-                    if condition.type_.as_str() == "Ready" {
-                        status = match condition.status.as_str() {
-                            "True" => String::from("Ready"),
-                            "False" => String::from("NotReady"),
-                            _ => String::default(),
-                        }
-                    }
-                }
-                status
-            }
-            None => String::default(),
-        }
-    }
-}
-
-impl Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}  {}  {}",
-            self.get_ready(),
-            self.phase.to_owned().unwrap_or_default(),
-            self.replicas.to_owned().unwrap_or_default(),
-        )
-    }
 }
