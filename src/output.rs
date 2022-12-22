@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use k8s_openapi::{
-    api::core::v1::{ContainerStatus, NodeStatus},
+    api::core::v1::{ContainerStatus, NodeStatus, PodStatus},
     apimachinery::pkg::apis::meta::v1::Time,
     chrono::Utc,
 };
@@ -27,6 +27,8 @@ pub struct Output {
 pub enum KubeOutput {
     #[tabled(inline)]
     Node(#[tabled(inline)] NodeOutput),
+    #[tabled(inline)]
+    Pod(#[tabled(inline)] PodOutput),
     #[tabled(inline)]
     Default_(#[tabled(inline)] DefaultOutput),
 }
@@ -102,6 +104,53 @@ impl From<DynamicObject> for DefaultOutput {
     }
 }
 
+#[derive(Tabled, Clone, Debug, Default)]
+#[tabled(rename_all = "UPPERCASE")]
+pub struct PodOutput {
+    pub clustername: String,
+    pub name: String,
+    pub status: String,
+    pub restarts: String,
+    pub age: String,
+}
+
+impl From<DynamicObject> for PodOutput {
+    fn from(d: DynamicObject) -> Self {
+        if let Some(status) = d.data.get("status") {
+            let status: PodStatus = serde_json::from_value(status.to_owned()).unwrap_or_default();
+            let container_statuses = status.container_statuses.unwrap_or_default();
+            let init_containers = status.init_container_statuses.unwrap_or_default();
+            Self {
+                clustername: "".into(),
+                name: d.name_any(),
+                status: status.phase.unwrap_or_else(|| "Unknown".to_string()),
+                restarts: {
+                    let mut restart_count = 0;
+                    container_statuses
+                        .iter()
+                        .for_each(|cs| restart_count += cs.restart_count);
+                    //.iter()
+                    //.inspect(|cs| restart_count += cs.restart_count)
+                    //.collect::<Vec<_>>();
+                    init_containers
+                        .iter()
+                        .for_each(|cs| restart_count += cs.restart_count);
+                    restart_count.to_string()
+                },
+                age: get_age(d.metadata.creation_timestamp),
+            }
+        } else {
+            Self {
+                clustername: "".into(),
+                name: d.name_any(),
+                status: "Unknown".into(),
+                age: get_age(d.metadata.creation_timestamp),
+                ..Default::default()
+            }
+        }
+    }
+}
+
 pub fn convert_list_response_to_table(lr: ListResponse) -> Vec<KubeOutput> {
     let mut kube_output = Vec::new();
     for obj in &lr.object_list {
@@ -110,6 +159,11 @@ pub fn convert_list_response_to_table(lr: ListResponse) -> Vec<KubeOutput> {
                 let mut node_output: NodeOutput = obj.clone().into();
                 node_output.clustername = lr.clustername.clone();
                 kube_output.push(KubeOutput::Node(node_output))
+            }
+            "Pod" => {
+                let mut pod_output: PodOutput = obj.clone().into();
+                pod_output.clustername = lr.clustername.clone();
+                kube_output.push(KubeOutput::Pod(pod_output))
             }
             _ => {
                 let mut default_output: DefaultOutput = obj.clone().into();
