@@ -408,4 +408,3 @@ fn get_external_ip(status: &ServiceStatus) -> String {
     }
     default
 }
-//fn get_port_list() -> String {}
