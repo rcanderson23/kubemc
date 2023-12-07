@@ -1,6 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
 use kubemc::commands::Cli;
+use kubemc::client::ListResponse;
+
+pub struct TestStruct {
+    pub name: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -12,5 +17,6 @@ async fn main() -> Result<()> {
         kubemc::commands::Action::GenerateConfig => cli.generate_config().await?,
         kubemc::commands::Action::Namespace { namespace } => cli.namespace(namespace).await?,
     }
+
     Ok(())
 }

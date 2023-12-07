@@ -10,7 +10,7 @@ use k8s_openapi::{
 };
 use kube::{core::DynamicObject, ResourceExt};
 use serde::Deserialize;
-use tabled::{Style, Table, Tabled};
+use tabled::{settings::Style, Table, Tabled};
 
 use crate::client::ListResponse;
 
