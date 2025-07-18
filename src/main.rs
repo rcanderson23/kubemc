@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use kubemc::commands::Cli;
 use kubemc::client::ListResponse;
+use kubemc::commands::Cli;
 
 pub struct TestStruct {
     pub name: String,
@@ -10,6 +10,9 @@ pub struct TestStruct {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install crypto provider");
     let cli = Cli::parse();
 
     match &cli.action {
