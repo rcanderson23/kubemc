@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use kubemc::client::ListResponse;
 use kubemc::commands::Cli;
 
 pub struct TestStruct {

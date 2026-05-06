@@ -6,7 +6,7 @@ use k8s_openapi::{
         core::v1::{ContainerStatus, NodeStatus, PodSpec, PodStatus, ServiceSpec, ServiceStatus},
     },
     apimachinery::pkg::apis::meta::v1::Time,
-    chrono::Utc,
+    jiff::{tz::TimeZone, Timestamp, Unit, ZonedDifference},
 };
 use kube::{core::DynamicObject, ResourceExt};
 use serde::Deserialize;
@@ -173,7 +173,7 @@ pub struct DeploymentOutput {
 
 impl From<DynamicObject> for DeploymentOutput {
     fn from(d: DynamicObject) -> Self {
-        if let (Some(status), Some(spec)) = (d.data.get("status"), d.data.get("spec")) {
+        if let (Some(status), Some(_spec)) = (d.data.get("status"), d.data.get("spec")) {
             let status: DeploymentStatus =
                 serde_json::from_value(status.to_owned()).unwrap_or_default();
             Self {
@@ -378,27 +378,40 @@ impl Display for Status {
 }
 
 fn get_age(creation: Option<Time>) -> String {
-    if creation.is_none() {
+    let Some(creation) = creation else {
         return String::default();
-    }
-    let duration = Utc::now().signed_duration_since(creation.unwrap().0);
+    };
+    let creation = creation.0.to_zoned(TimeZone::UTC);
+    let now = Timestamp::now().to_zoned(TimeZone::UTC);
+    let span = now
+        .since(
+            ZonedDifference::new(&creation)
+                .largest(Unit::Day)
+                .smallest(Unit::Second),
+        )
+        .unwrap();
+    // let duration = Utc::now().signed_duration_since(creation.unwrap().0);
     match (
-        duration.num_days(),
-        duration.num_hours(),
-        duration.num_minutes(),
-        duration.num_seconds(),
+        span.get_days(),
+        span.get_hours(),
+        span.get_minutes(),
+        span.get_seconds(),
     ) {
-        (days, hours, _, _) if days > 2 => format!("{}d{}h", days, hours - 24 * days),
-        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins - 60 * hours),
-        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs - 60 * mins),
+        (days, hours, _, _) if days > 0 => format!("{}d{}h", days, hours),
+        (_, hours, mins, _) if hours > 0 => format!("{}h{}m", hours, mins),
+        (_, _, mins, secs) if mins > 0 => format!("{}m{}s", mins, secs),
         (_, _, _, secs) => format!("{}s", secs),
     }
 }
 
 fn get_external_ip(status: &ServiceStatus) -> String {
     let default = "<none>".to_string();
-    let Some(lb) = &status.load_balancer else {return default};
-    let Some(ing) = &lb.ingress else {return default};
+    let Some(lb) = &status.load_balancer else {
+        return default;
+    };
+    let Some(ing) = &lb.ingress else {
+        return default;
+    };
     if let Some(first_ing) = ing.first() {
         if let Some(ip) = &first_ing.ip {
             return ip.to_owned();
